@@ -1,6 +1,6 @@
-### `README.md`
-
 # Criterion Embedding Visualization
+
+<img width="1012" alt="Screenshot 2024-12-01 at 4 54 29 PM" src="https://github.com/user-attachments/assets/59b4f762-3dd5-4c46-bd45-98bdff8f0535">
 
 This project is designed to create vector embeddings for Criterion movie titles and descriptions using the Nomic Embedding API. The embeddings can be used for advanced data analysis, clustering, and visualization, enabling deeper exploration of the Criterion Channel's catalog.
 
