@@ -1,3 +1,6 @@
 .env
 node_modules
 .vscode/settings.json
+usage_log.json
+embeddings.json
+embeddings.json
