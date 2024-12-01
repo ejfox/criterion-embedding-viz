@@ -9,6 +9,9 @@ const API_KEY = process.env.NOMIC_API_KEY; // Load API key from .env
 const API_URL = "https://api-atlas.nomic.ai/v1/embedding/text";
 const OUTPUT_FILE = "embeddings.json";
 const BATCH_SIZE = 10; // Number of embeddings to process per batch
+const USAGE_LOG_FILE = "usage_log.json";
+const MONTHLY_TOKEN_QUOTA = 10_000_000; // Free tier: 10M tokens
+const TOKEN_OVERAGE_RATE = 0.0001; // $0.0001 per token over quota
 
 // Ensure API key exists
 if (!API_KEY) {
@@ -27,6 +30,19 @@ let lastProcessedIndex = 0;
 const limiter = new Bottleneck({
   minTime: 200, // Limit to 5 requests per second
 });
+
+// Modify the usage tracking object
+let usageStats = {
+  totalBatches: 0,
+  totalTexts: 0,
+  totalTokens: 0,
+  estimatedCost: 0,
+  quotaUsagePercent: 0,
+  errors: 0,
+  startTime: null,
+  endTime: null,
+  duration: null,
+};
 
 // Helper function: Save progress
 const saveProgress = () => {
@@ -56,8 +72,51 @@ const filterUnprocessedMovies = () => {
   return movies.filter((movie) => !processedIDs.has(movie.ID));
 };
 
+// Update the saveUsageStats function
+const saveUsageStats = () => {
+  usageStats.endTime = new Date().toISOString();
+
+  // Calculate duration
+  const start = new Date(usageStats.startTime);
+  const end = new Date(usageStats.endTime);
+  usageStats.duration = ((end - start) / 1000 / 60).toFixed(2) + " minutes";
+
+  // Calculate quota usage and costs
+  usageStats.quotaUsagePercent = (
+    (usageStats.totalTokens / MONTHLY_TOKEN_QUOTA) *
+    100
+  ).toFixed(2);
+
+  // Calculate potential overage costs
+  const overageTokens = Math.max(
+    0,
+    usageStats.totalTokens - MONTHLY_TOKEN_QUOTA
+  );
+  usageStats.estimatedCost = (overageTokens * TOKEN_OVERAGE_RATE).toFixed(2);
+
+  fs.writeFileSync(
+    USAGE_LOG_FILE,
+    JSON.stringify(usageStats, null, 2),
+    "utf-8"
+  );
+
+  // Log a usage summary
+  console.log(`
+📊 Usage Summary:
+   • Processed ${usageStats.totalTexts} texts in ${
+    usageStats.totalBatches
+  } batches
+   • Total tokens: ${usageStats.totalTokens.toLocaleString()}
+   • Monthly quota usage: ${usageStats.quotaUsagePercent}%
+   • Estimated overage cost: $${usageStats.estimatedCost}
+   • Duration: ${usageStats.duration}
+   • Errors: ${usageStats.errors}
+  `);
+};
+
 // Main function
 const generateEmbeddings = async () => {
+  usageStats.startTime = new Date().toISOString();
   console.log(`📄 Parsed ${movies.length} movies from the CSV.`);
 
   // Filter movies to process
@@ -77,6 +136,15 @@ const generateEmbeddings = async () => {
       movie["Title (Data retrieved 2019-06-21)"], // Title
       movie.Description, // Description
     ]);
+
+    // Update usage stats
+    usageStats.totalBatches++;
+    usageStats.totalTexts += texts.length;
+    // Rough token estimation (assuming ~4 chars per token)
+    usageStats.totalTokens += texts.reduce(
+      (sum, text) => sum + Math.ceil(text.length / 4),
+      0
+    );
 
     try {
       // API request for the batch
@@ -111,11 +179,13 @@ const generateEmbeddings = async () => {
         }/${moviesToProcess.length}).`
       );
     } catch (error) {
+      usageStats.errors++;
       console.error(
         `❌ Error processing batch starting at ${i}: ${error.message}`
       );
       // Save progress even on error so we can resume from this point
       saveProgress();
+      saveUsageStats(); // Save usage stats on error
       throw error; // Re-throw to stop processing
     }
 
@@ -123,6 +193,8 @@ const generateEmbeddings = async () => {
     saveProgress();
   }
 
+  // Save final usage stats
+  saveUsageStats();
   console.log("🎉 All embeddings generated successfully!");
 };
 
@@ -132,13 +204,35 @@ const processMovies = () => {
     .pipe(csv())
     .on("data", (row) => movies.push(row))
     .on("end", async () => {
-      await generateEmbeddings();
+      try {
+        await generateEmbeddings();
+      } catch (error) {
+        console.error("❌ Fatal error:", error.message);
+        saveUsageStats(); // Save usage stats on fatal error
+      }
     })
     .on("error", (err) => {
       console.error("❌ Error reading CSV file:", err.message);
+      saveUsageStats(); // Save usage stats on CSV error
     });
 };
 
 // Load existing embeddings and start processing
 loadExistingEmbeddings();
 processMovies();
+
+// Handle interruption gracefully
+process.on("SIGINT", async () => {
+  console.log("\n\n🛑 Gracefully shutting down...");
+  saveProgress();
+  saveUsageStats();
+  process.exit(0);
+});
+
+// Also add SIGTERM handling for other types of termination
+process.on("SIGTERM", async () => {
+  console.log("\n\n🛑 Received termination signal...");
+  saveProgress();
+  saveUsageStats();
+  process.exit(0);
+});
