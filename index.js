@@ -7,7 +7,8 @@ require("dotenv").config(); // Load environment variables
 // Configuration
 const API_KEY = process.env.NOMIC_API_KEY; // Load API key from .env
 const API_URL = "https://api-atlas.nomic.ai/v1/embedding/text";
-const OUTPUT_FILE = "embeddings.json";
+const EMBEDDINGS_FILE = "criterion_embeddings.json";
+const R2_EMBEDDINGS_URL = "https://r2.ejfox.com/criterion_embeddings.json";
 const BATCH_SIZE = 10; // Number of embeddings to process per batch
 const USAGE_LOG_FILE = "usage_log.json";
 const MONTHLY_TOKEN_QUOTA = 10_000_000; // Free tier: 10M tokens
@@ -44,26 +45,82 @@ let usageStats = {
   duration: null,
 };
 
+// Helper function: Load existing embeddings
+const loadExistingEmbeddings = async () => {
+  // Check if embeddings file exists locally
+  if (!fs.existsSync(EMBEDDINGS_FILE)) {
+    console.log(`📥 Embeddings file not found locally. Downloading from R2...`);
+    try {
+      await downloadEmbeddingsFromR2();
+    } catch (error) {
+      console.error(`❌ Failed to download embeddings: ${error.message}`);
+      // Initialize empty embeddings if download fails
+      embeddings = [];
+      lastProcessedIndex = 0;
+      return;
+    }
+  }
+
+  try {
+    const savedData = JSON.parse(fs.readFileSync(EMBEDDINGS_FILE, "utf-8"));
+    embeddings = savedData.embeddings || [];
+    lastProcessedIndex = savedData.lastProcessedIndex || 0;
+    console.log(
+      `🔄 Loaded ${embeddings.length} embeddings. Starting from index ${lastProcessedIndex}`
+    );
+  } catch (error) {
+    console.error(`❌ Error loading embeddings: ${error.message}`);
+    // Initialize empty embeddings if parsing fails
+    embeddings = [];
+    lastProcessedIndex = 0;
+  }
+};
+
+// Helper function: Download embeddings from R2
+const downloadEmbeddingsFromR2 = async () => {
+  console.log(`🚀 Downloading embeddings from R2...`);
+
+  try {
+    const response = await axios({
+      method: "get",
+      url: R2_EMBEDDINGS_URL,
+      responseType: "stream",
+    });
+
+    const writer = fs.createWriteStream(EMBEDDINGS_FILE);
+
+    return new Promise((resolve, reject) => {
+      response.data.pipe(writer);
+
+      let error = null;
+      writer.on("error", (err) => {
+        error = err;
+        writer.close();
+        reject(err);
+      });
+
+      writer.on("close", () => {
+        if (!error) {
+          console.log(`✅ Successfully downloaded embeddings file.`);
+          resolve();
+        }
+        // No need to reject here as it would have been called in the 'error' event
+      });
+    });
+  } catch (error) {
+    console.error(`❌ Error downloading embeddings: ${error.message}`);
+    throw error;
+  }
+};
+
 // Helper function: Save progress
 const saveProgress = () => {
   const saveData = {
     embeddings,
     lastProcessedIndex,
   };
-  fs.writeFileSync(OUTPUT_FILE, JSON.stringify(saveData, null, 2), "utf-8");
-  console.log(`✅ Progress saved to ${OUTPUT_FILE}`);
-};
-
-// Helper function: Load existing embeddings
-const loadExistingEmbeddings = () => {
-  if (fs.existsSync(OUTPUT_FILE)) {
-    const savedData = JSON.parse(fs.readFileSync(OUTPUT_FILE, "utf-8"));
-    embeddings = savedData.embeddings || [];
-    lastProcessedIndex = savedData.lastProcessedIndex || 0;
-    console.log(
-      `🔄 Resuming from existing progress. Loaded ${embeddings.length} embeddings. Starting from index ${lastProcessedIndex}`
-    );
-  }
+  fs.writeFileSync(EMBEDDINGS_FILE, JSON.stringify(saveData, null, 2), "utf-8");
+  console.log(`✅ Progress saved to ${EMBEDDINGS_FILE}`);
 };
 
 // Helper function: Filter unprocessed movies
@@ -218,8 +275,10 @@ const processMovies = () => {
 };
 
 // Load existing embeddings and start processing
-loadExistingEmbeddings();
-processMovies();
+(async () => {
+  await loadExistingEmbeddings();
+  processMovies();
+})();
 
 // Handle interruption gracefully
 process.on("SIGINT", async () => {

@@ -3,5 +3,4 @@ node_modules
 .vscode/settings.json
 usage_log.json
 embeddings.json
-embeddings.json
-embeddings.json
+criterion_embeddings.json

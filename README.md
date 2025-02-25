@@ -1,8 +1,12 @@
 # Criterion Embedding Visualization
 
-<img width="1012" alt="Screenshot 2024-12-01 at 4 54 29 PM" src="https://github.com/user-attachments/assets/59b4f762-3dd5-4c46-bd45-98bdff8f0535">
+<img width="1012" alt="Screenshot 2024-12-01 at 4 54 29 PM" src="https://github.com/user-attachments/assets/59b4f762-3dd5-4c46-bd45-98bdff8f0535">
 
 This project is designed to create vector embeddings for Criterion movie titles and descriptions using the Nomic Embedding API. The embeddings can be used for advanced data analysis, clustering, and visualization, enabling deeper exploration of the Criterion Channel's catalog.
+
+## Note About Embeddings File
+
+The `criterion_embeddings.json` file (~156MB) is stored on R2 and not in the Git repository due to its large size. Use the provided download script to fetch it.
 
 ## Objectives
 
@@ -31,7 +35,7 @@ We acknowledge and thank [u/morbusiff](https://www.reddit.com/user/morbusiff) fo
    - Rate-limiting is implemented via the `bottleneck` library to respect API constraints.
 
 4. **Output**:
-   - Embeddings are saved in JSON format (`embeddings.json`), maintaining a structured representation of the data alongside the generated embeddings.
+   - Embeddings are saved in JSON format (`criterion_embeddings.json`), maintaining a structured representation of the data alongside the generated embeddings.
 
 ## Features
 
@@ -65,6 +69,12 @@ We acknowledge and thank [u/morbusiff](https://www.reddit.com/user/morbusiff) fo
 
 4. Place your dataset in the root directory as `criterion_movies.csv`.
 
+5. Download the embeddings file:
+   ```bash
+   ./download-embeddings.sh
+   ```
+   This downloads the pre-generated embeddings file (~156MB) from Cloudflare R2.
+
 ## Execution
 
 Run the script to generate embeddings:
@@ -74,7 +84,7 @@ node index.js
 
 ## Data Output
 
-The script generates embeddings in `embeddings.json`. Each entry includes:
+The script generates embeddings in `criterion_embeddings.json`. Each entry includes:
 - Metadata from the CSV dataset.
 - Separate embeddings for the movie title and description.
 
@@ -101,7 +111,7 @@ The generated embeddings can be used for:
 ## Limitations
 
 - The embeddings are limited to the semantic information provided in titles and descriptions. Additional metadata (e.g., genre, director) could enhance future analyses.
-- Generated embeddings are dependent on the Nomic API’s embedding model as of the time of execution.
+- Generated embeddings are dependent on the Nomic API's embedding model as of the time of execution.
 
 ## Ethical Considerations
 
