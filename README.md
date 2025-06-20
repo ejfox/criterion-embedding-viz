@@ -66,6 +66,17 @@ We acknowledge and thank [u/morbusiff](https://www.reddit.com/user/morbusiff) fo
    ```bash
    echo "NOMIC_API_KEY=your_nomic_api_key" > .env
    ```
+   
+   ### Advanced Configuration Options
+   ```bash
+   # Output format
+   OUTPUT_FORMAT=ndjson        # "json" or "ndjson" (newline-delimited JSON)
+   OUTPUT_FILE=criterion_embeddings.ndjson
+   
+   # Embedding configuration
+   TASK_TYPE=search_document   # "search_document", "search_query", "clustering", "classification"
+   DIMENSIONALITY=768          # 768 or 256 for Nomic
+   ```
 
 4. Place your dataset in the root directory as `criterion_movies.csv`.
 
@@ -117,6 +128,30 @@ The generated embeddings can be used for:
 
 - **Data Provenance**: The dataset was shared publicly and is used for analytical purposes. Attribution is provided to the original compiler.
 - **Intellectual Property**: Ensure proper use of Criterion Channel data in compliance with its terms of service and copyright regulations.
+
+## Future Enhancements / TODO
+
+### Wikipedia Enrichment
+Concept: Automatically find and embed Wikipedia articles for each movie to create richer embeddings:
+- Use Wikipedia API to search for each movie title + year + director
+- Implement human spot-checking interface to verify correct matches
+- Extract and chunk Wikipedia content by logical sections (plot, cast, production, reception, etc.)
+- Generate embeddings for each section separately
+- Could enable deeper semantic search like "films about existentialism" or "movies with troubled productions"
+- Store Wikipedia URLs and section embeddings alongside movie data
+
+### Multi-Provider Embedding Support
+Make it easy to swap between different embedding services:
+- **OpenRouter** (priority) - Access to multiple models through one API
+- OpenAI embeddings (text-embedding-3-small/large)
+- Cohere embeddings
+- Local embeddings (sentence-transformers)
+
+Challenges to solve:
+- Different providers use different dimensions (OpenAI: 1536/3072, Nomic: 768/256, etc.)
+- Need abstraction layer to handle different API formats
+- Store provider metadata with embeddings for compatibility
+- Consider dimension reduction techniques for cross-provider compatibility
 
 ## Acknowledgments
 

@@ -115,12 +115,23 @@ const downloadEmbeddingsFromR2 = async () => {
 
 // Helper function: Save progress
 const saveProgress = () => {
-  const saveData = {
-    embeddings,
-    lastProcessedIndex,
-  };
-  fs.writeFileSync(EMBEDDINGS_FILE, JSON.stringify(saveData, null, 2), "utf-8");
-  console.log(`✅ Progress saved to ${EMBEDDINGS_FILE}`);
+  // Support NDJSON format
+  const outputFormat = process.env.OUTPUT_FORMAT || "json";
+  const outputFile = process.env.OUTPUT_FILE || EMBEDDINGS_FILE;
+  
+  if (outputFormat === "ndjson") {
+    // For NDJSON, write each embedding on its own line
+    const ndjsonData = embeddings.map(e => JSON.stringify(e)).join('\n') + '\n';
+    fs.writeFileSync(outputFile, ndjsonData, "utf-8");
+  } else {
+    // Original JSON format
+    const saveData = {
+      embeddings,
+      lastProcessedIndex,
+    };
+    fs.writeFileSync(outputFile, JSON.stringify(saveData, null, 2), "utf-8");
+  }
+  console.log(`✅ Progress saved to ${outputFile} (format: ${outputFormat})`);
 };
 
 // Helper function: Filter unprocessed movies
@@ -204,15 +215,18 @@ const generateEmbeddings = async () => {
     );
 
     try {
-      // API request for the batch
+      // API request for the batch (with configurable parameters)
+      const taskType = process.env.TASK_TYPE || "search_document";
+      const dimensionality = parseInt(process.env.DIMENSIONALITY) || 768;
+      
       const response = await limiter.schedule(() =>
         axios.post(
           API_URL,
           {
             texts,
-            task_type: "search_document",
+            task_type: taskType,
             max_tokens_per_text: 8192,
-            dimensionality: 768,
+            dimensionality: dimensionality,
           },
           { headers: { Authorization: `Bearer ${API_KEY}` } }
         )
