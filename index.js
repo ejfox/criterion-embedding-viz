@@ -2,6 +2,8 @@ const fs = require("fs");
 const csv = require("csv-parser");
 const axios = require("axios");
 const Bottleneck = require("bottleneck");
+const { processMoviesWithWikipedia, enrichMovieWithWikipedia } = require("./wikipedia-enrichment");
+const { getDefaultProvider, createEmbeddingProvider } = require("./embedding-providers");
 require("dotenv").config(); // Load environment variables
 
 // Configuration
@@ -14,13 +16,11 @@ const USAGE_LOG_FILE = "usage_log.json";
 const MONTHLY_TOKEN_QUOTA = 10_000_000; // Free tier: 10M tokens
 const TOKEN_OVERAGE_RATE = 0.0001; // $0.0001 per token over quota
 
-// Ensure API key exists
-if (!API_KEY) {
-  console.error(
-    "❌ API key is missing. Please set NOMIC_API_KEY in your .env file."
-  );
-  process.exit(1);
-}
+// Wikipedia Integration Settings
+const ENABLE_WIKIPEDIA = process.env.ENABLE_WIKIPEDIA === "true";
+const WIKIPEDIA_ONLY = process.env.WIKIPEDIA_ONLY === "true"; // Just do Wikipedia, skip embeddings
+
+// API key checking is now handled by individual providers
 
 // Initialize variables
 const movies = [];
@@ -31,6 +31,17 @@ let lastProcessedIndex = 0;
 const limiter = new Bottleneck({
   minTime: 200, // Limit to 5 requests per second
 });
+
+// Initialize embedding provider
+let embeddingProvider;
+try {
+  const providerName = process.env.EMBEDDING_PROVIDER || 'nomic';
+  embeddingProvider = createEmbeddingProvider(providerName, limiter);
+  console.log(`🤖 Using ${embeddingProvider.name} embeddings (${embeddingProvider.getDimensions()}d)`);
+} catch (error) {
+  console.error('❌ Failed to initialize embedding provider:', error.message);
+  process.exit(1);
+}
 
 // Modify the usage tracking object
 let usageStats = {
@@ -200,10 +211,35 @@ const generateEmbeddings = async () => {
     i += BATCH_SIZE
   ) {
     const batch = moviesToProcess.slice(i, i + BATCH_SIZE);
-    const texts = batch.flatMap((movie) => [
-      movie["Title (Data retrieved 2019-06-21)"], // Title
-      movie.Description, // Description
-    ]);
+    const texts = [];
+    const textTypes = []; // Track what type each embedding represents
+    
+    batch.forEach((movie) => {
+      // Original title and description
+      texts.push(movie["Title (Data retrieved 2019-06-21)"]);
+      textTypes.push('title');
+      
+      texts.push(movie.Description);
+      textTypes.push('description');
+      
+      // Wikipedia content if available
+      if (movie.wikipedia && movie.wikipedia.found && movie.wikipedia.sections) {
+        // Add Wikipedia summary
+        texts.push("Wikipedia Summary: " + movie.wikipedia.summary);
+        textTypes.push('wikipedia_summary');
+        
+        // Add key Wikipedia sections (limit to avoid token limits)
+        const keySection = movie.wikipedia.sections.find(s => 
+          s.title.toLowerCase().includes('plot') || 
+          s.title.toLowerCase().includes('synopsis')
+        ) || movie.wikipedia.sections[0]; // Fallback to first section
+        
+        if (keySection) {
+          texts.push(`Wikipedia ${keySection.title}: ${keySection.content.substring(0, 1000)}`);
+          textTypes.push('wikipedia_section');
+        }
+      }
+    });
 
     // Update usage stats
     usageStats.totalBatches++;
@@ -215,30 +251,49 @@ const generateEmbeddings = async () => {
     );
 
     try {
-      // API request for the batch (with configurable parameters)
-      const taskType = process.env.TASK_TYPE || "search_document";
-      const dimensionality = parseInt(process.env.DIMENSIONALITY) || 768;
+      // Generate embeddings using the selected provider
+      console.log(`   🤖 Generating embeddings with ${embeddingProvider.name} (${texts.length} texts)`);
+      const result = await embeddingProvider.embed(texts);
       
-      const response = await limiter.schedule(() =>
-        axios.post(
-          API_URL,
-          {
-            texts,
-            task_type: taskType,
-            max_tokens_per_text: 8192,
-            dimensionality: dimensionality,
-          },
-          { headers: { Authorization: `Bearer ${API_KEY}` } }
-        )
-      );
+      // Update usage stats with actual token usage
+      if (result.usage) {
+        usageStats.totalTokens += result.usage.total_tokens;
+      }
 
       // Map embeddings back to movies
-      batch.forEach((movie, index) => {
-        embeddings.push({
+      let embeddingIndex = 0;
+      batch.forEach((movie) => {
+        const movieWithEmbeddings = { 
           ...movie,
-          title_embedding: response.data.embeddings[index * 2], // Title embedding
-          description_embedding: response.data.embeddings[index * 2 + 1], // Description embedding
-        });
+          _embedding_metadata: {
+            provider: embeddingProvider.name,
+            model: result.model,
+            dimensions: result.dimensions,
+            generated_at: new Date().toISOString()
+          }
+        };
+        
+        // Always have title and description
+        movieWithEmbeddings.title_embedding = result.embeddings[embeddingIndex++];
+        movieWithEmbeddings.description_embedding = result.embeddings[embeddingIndex++];
+        
+        // Add Wikipedia embeddings if available
+        if (movie.wikipedia && movie.wikipedia.found && movie.wikipedia.sections) {
+          movieWithEmbeddings.wikipedia_summary_embedding = result.embeddings[embeddingIndex++];
+          
+          // Key section embedding
+          const keySection = movie.wikipedia.sections.find(s => 
+            s.title.toLowerCase().includes('plot') || 
+            s.title.toLowerCase().includes('synopsis')
+          ) || movie.wikipedia.sections[0];
+          
+          if (keySection) {
+            movieWithEmbeddings.wikipedia_section_embedding = result.embeddings[embeddingIndex++];
+            movieWithEmbeddings.wikipedia_section_title = keySection.title;
+          }
+        }
+        
+        embeddings.push(movieWithEmbeddings);
       });
 
       // Update lastProcessedIndex after successful processing
@@ -276,7 +331,26 @@ const processMovies = () => {
     .on("data", (row) => movies.push(row))
     .on("end", async () => {
       try {
-        await generateEmbeddings();
+        if (WIKIPEDIA_ONLY) {
+          // Just do Wikipedia enrichment, no embeddings
+          console.log("🔍 Wikipedia-only mode enabled");
+          await processMoviesWithWikipedia(movies);
+          console.log("🎉 Wikipedia enrichment complete!");
+        } else if (ENABLE_WIKIPEDIA) {
+          // Do Wikipedia enrichment first, then embeddings
+          console.log("🔍 Wikipedia enrichment enabled");
+          const enrichedMovies = await processMoviesWithWikipedia(movies);
+          
+          // Replace movies array with enriched version
+          movies.length = 0;
+          movies.push(...enrichedMovies);
+          
+          // Now generate embeddings with Wikipedia content
+          await generateEmbeddings();
+        } else {
+          // Original behavior - just embeddings
+          await generateEmbeddings();
+        }
       } catch (error) {
         console.error("❌ Fatal error:", error.message);
         saveUsageStats(); // Save usage stats on fatal error
